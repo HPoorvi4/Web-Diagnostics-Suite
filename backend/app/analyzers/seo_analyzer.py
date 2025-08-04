@@ -3,7 +3,7 @@ import aiohttp
 import time
 import logging
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 import re
 from bs4 import BeautifulSoup
@@ -11,27 +11,10 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 class SEOAnalyzer:
-    """
-    Analyzes website SEO factors and search engine optimization.
-    
-    Think of this as an SEO EXPERT who:
-    - Checks title tags and meta descriptions
-    - Analyzes heading structure (H1, H2, etc.)
-    - Reviews image optimization (alt tags)
-    - Tests internal/external links
-    - Validates structured data
-    - Measures content quality
-    
-    This analyzer is crucial because:
-    - 68% of online experiences begin with a search engine
-    - Proper SEO can increase organic traffic by 2000%+
-    - Google uses 200+ ranking factors
-    - Good SEO = free, long-term traffic
-    """
-    
-    def __init__(self):
+    def __init__(self, debug=False):
         """Initialize the SEO analyzer."""
         self.timeout = 15  # Maximum time to wait for page content
+        self.debug = debug
         
         # SEO scoring weights
         self.scoring_weights = {
@@ -57,27 +40,12 @@ class SEOAnalyzer:
         
         logger.info("SEOAnalyzer initialized")
     
+    def _debug_log(self, message: str):
+        """Log debug messages if debug mode is enabled."""
+        if self.debug:
+            print(f"DEBUG: {message}")
+    
     async def analyze(self, url: str) -> Dict[str, Any]:
-        """
-        Perform comprehensive SEO analysis of a website.
-        
-        This is like having an SEO audit:
-        1. Fetch the page HTML content
-        2. Parse and analyze title tags
-        3. Check meta descriptions
-        4. Analyze heading structure
-        5. Review image optimization
-        6. Test link structure
-        7. Evaluate content quality
-        8. Check technical SEO factors
-        9. Calculate overall SEO score
-        
-        Args:
-            url: Website URL to analyze
-            
-        Returns:
-            Dictionary with SEO metrics, score, and recommendations
-        """
         logger.info(f"Starting SEO analysis for: {url}")
         start_time = time.time()
         
@@ -87,6 +55,8 @@ class SEOAnalyzer:
             
             if not html_content:
                 return self._create_error_result(url, "Could not fetch page content", time.time() - start_time)
+            
+            self._debug_log(f"Fetched {len(html_content)} characters of HTML content")
             
             # Parse HTML with BeautifulSoup
             soup = BeautifulSoup(html_content, 'html.parser')
@@ -144,8 +114,8 @@ class SEOAnalyzer:
                 
                 # Metadata
                 "analysis_duration": analysis_time,
-                "analyzed_at": datetime.utcnow().isoformat(),
-                "analyzer_version": "1.0.0"
+                "analyzed_at": datetime.now(timezone.utc).isoformat(),
+                "analyzer_version": "1.0.1"
             }
             
             logger.info(f"SEO analysis completed. Score: {seo_score}/100")
@@ -167,7 +137,16 @@ class SEOAnalyzer:
         try:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            # Use proper headers to avoid being blocked
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+            }
+            
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
                 async with session.get(url, allow_redirects=True) as response:
                     content = await response.text()
                     
@@ -177,6 +156,9 @@ class SEOAnalyzer:
                         "final_url": str(response.url),
                         "redirected": str(response.url) != url
                     }
+                    
+                    self._debug_log(f"Response status: {response.status}")
+                    self._debug_log(f"Content type: {page_info['content_type']}")
                     
                     return content, page_info
                     
@@ -194,7 +176,8 @@ class SEOAnalyzer:
         """
         title_tag = soup.find('title')
         
-        if not title_tag or not title_tag.get_text(strip=True):
+        if not title_tag:
+            self._debug_log("No title tag found")
             return {
                 "exists": False,
                 "text": "",
@@ -205,6 +188,18 @@ class SEOAnalyzer:
             }
         
         title_text = title_tag.get_text(strip=True)
+        self._debug_log(f"Found title: '{title_text}' (length: {len(title_text)})")
+        
+        if not title_text:
+            return {
+                "exists": False,
+                "text": "",
+                "length": 0,
+                "score": 0,
+                "issues": ["Empty title tag"],
+                "recommendations": ["Add a descriptive title tag"]
+            }
+        
         title_length = len(title_text)
         
         # Score title based on length and quality
@@ -253,9 +248,13 @@ class SEOAnalyzer:
         Analyze the meta description tag.
         Critical for search result click-through rates.
         """
-        meta_desc = soup.find('meta', attrs={'name': 'description'})
+        # Look for meta description with different approaches
+        meta_desc = soup.find('meta', attrs={'name': 'description'}) or \
+                   soup.find('meta', attrs={'name': 'Description'}) or \
+                   soup.find('meta', attrs={'property': 'og:description'})
         
-        if not meta_desc or not meta_desc.get('content', '').strip():
+        if not meta_desc:
+            self._debug_log("No meta description found")
             return {
                 "exists": False,
                 "text": "",
@@ -266,6 +265,18 @@ class SEOAnalyzer:
             }
         
         desc_text = meta_desc.get('content', '').strip()
+        self._debug_log(f"Found meta description: '{desc_text[:50]}...' (length: {len(desc_text)})")
+        
+        if not desc_text:
+            return {
+                "exists": False,
+                "text": "",
+                "length": 0,
+                "score": 0,
+                "issues": ["Empty meta description"],
+                "recommendations": ["Add compelling meta description"]
+            }
+        
         desc_length = len(desc_text)
         
         # Score description based on length and quality
@@ -319,6 +330,10 @@ class SEOAnalyzer:
         # Count headings
         h1_count = len(headings["h1"])
         total_headings = sum(len(headings[level]) for level in headings)
+        
+        self._debug_log(f"Found headings - H1: {h1_count}, Total: {total_headings}")
+        if h1_count > 0:
+            self._debug_log(f"H1 text: '{headings['h1'][0][:50]}...'")
         
         # Score heading structure
         score = 100
@@ -376,6 +391,8 @@ class SEOAnalyzer:
         images = soup.find_all('img')
         total_images = len(images)
         
+        self._debug_log(f"Found {total_images} images")
+        
         if total_images == 0:
             return {
                 "total_count": 0,
@@ -392,17 +409,19 @@ class SEOAnalyzer:
         empty_alt = 0
         large_images = []
         
-        for img in images:
-            alt_text = img.get('alt', '').strip()
+        for i, img in enumerate(images):
+            alt_text = img.get('alt')
             src = img.get('src', '')
             
-            if alt_text:
+            if self.debug and i < 3:  # Debug first 3 images
+                self._debug_log(f"Image {i+1}: src='{src[:30]}...', alt='{alt_text}'")
+            
+            if alt_text is not None and alt_text.strip():
                 images_with_alt += 1
             else:
                 images_without_alt += 1
-            
-            if alt_text == '':
-                empty_alt += 1
+                if alt_text == '':
+                    empty_alt += 1
             
             # Check for large images (basic heuristic)
             if any(size in src.lower() for size in ['large', 'big', 'huge', 'xl']):
@@ -410,6 +429,8 @@ class SEOAnalyzer:
         
         # Calculate metrics
         alt_percentage = (images_with_alt / total_images) * 100 if total_images > 0 else 100
+        
+        self._debug_log(f"Images with alt: {images_with_alt}/{total_images} ({alt_percentage:.1f}%)")
         
         # Score images
         score = 100
@@ -451,27 +472,36 @@ class SEOAnalyzer:
         
         internal_links = []
         external_links = []
-        broken_links = []
         
-        domain = urlparse(url).netloc
+        domain = urlparse(url).netloc.lower()
+        self._debug_log(f"Analyzing links for domain: {domain}")
         
         for link in links:
             href = link.get('href', '').strip()
             link_text = link.get_text(strip=True)
             
-            if not href or href.startswith('#'):
-                continue  # Skip anchor links
+            if not href or href.startswith('#') or href.startswith('javascript:') or href.startswith('mailto:'):
+                continue  # Skip anchor links, javascript, and mailto
             
-            # Resolve relative URLs
+            # Resolve relative URLs and normalize
             if href.startswith('/'):
-                href = urljoin(url, href)
+                full_url = urljoin(url, href)
+                link_domain = domain  # It's a relative link, so same domain
+            elif href.startswith('http'):
+                full_url = href
+                link_domain = urlparse(href).netloc.lower()
+            else:
+                # Relative path
+                full_url = urljoin(url, href)
+                link_domain = domain
             
             # Categorize links
-            link_domain = urlparse(href).netloc
-            if link_domain == domain or not link_domain:
-                internal_links.append({"url": href, "text": link_text})
+            if link_domain == domain:
+                internal_links.append({"url": full_url, "text": link_text})
             else:
-                external_links.append({"url": href, "text": link_text})
+                external_links.append({"url": full_url, "text": link_text})
+        
+        self._debug_log(f"Found {len(internal_links)} internal links, {len(external_links)} external links")
         
         # Score link structure
         score = 100
@@ -501,8 +531,10 @@ class SEOAnalyzer:
         external_without_nofollow = 0
         for link in soup.find_all('a', href=True):
             href = link.get('href', '')
-            if href.startswith('http') and urlparse(href).netloc != domain:
+            if href.startswith('http') and urlparse(href).netloc.lower() != domain:
                 rel = link.get('rel', [])
+                if isinstance(rel, str):
+                    rel = [rel]
                 if 'nofollow' not in rel:
                     external_without_nofollow += 1
         
@@ -522,12 +554,20 @@ class SEOAnalyzer:
         Analyze content quality and structure.
         Quality content is crucial for SEO rankings.
         """
-        # Extract text content
-        # Remove script and style elements
-        for script in soup(["script", "style"]):
+        # Create a copy to avoid modifying the original
+        soup_copy = BeautifulSoup(str(soup), 'html.parser')
+        
+        # Remove script and style elements more comprehensively
+        for script in soup_copy(["script", "style", "nav", "header", "footer", "aside"]):
             script.decompose()
         
-        text = soup.get_text()
+        # Try to find main content area
+        main_content = soup_copy.find('main') or soup_copy.find('article') or soup_copy.find('div', class_=re.compile(r'content|main|body', re.I))
+        
+        if main_content:
+            text = main_content.get_text()
+        else:
+            text = soup_copy.get_text()
         
         # Clean up text
         lines = (line.strip() for line in text.splitlines())
@@ -535,12 +575,14 @@ class SEOAnalyzer:
         text = ' '.join(chunk for chunk in chunks if chunk)
         
         # Count words
-        words = text.split()
+        words = [word for word in text.split() if len(word) > 1]  # Filter out single characters
         word_count = len(words)
         
+        self._debug_log(f"Content analysis: {word_count} words")
+        
         # Calculate reading level (simplified)
-        sentences = text.split('.')
-        sentence_count = len([s for s in sentences if s.strip()])
+        sentences = [s.strip() for s in text.split('.') if s.strip() and len(s.strip()) > 10]
+        sentence_count = len(sentences)
         avg_words_per_sentence = word_count / max(sentence_count, 1)
         
         # Score content
@@ -561,22 +603,26 @@ class SEOAnalyzer:
             recommendations.append("Use shorter sentences for better readability")
         
         # Check for duplicate content patterns
-        word_frequency = {}
-        for word in words:
-            if len(word) > 3:  # Only count meaningful words
-                word_lower = word.lower()
-                word_frequency[word_lower] = word_frequency.get(word_lower, 0) + 1
-        
-        # Find overused words
-        total_meaningful_words = sum(word_frequency.values())
-        overused_words = []
-        for word, count in word_frequency.items():
-            if count / total_meaningful_words > 0.05:  # More than 5% of content
-                overused_words.append(f"{word} ({count} times)")
-        
-        if overused_words:
-            score -= 5
-            issues.append("Some words may be overused")
+        if word_count > 0:
+            word_frequency = {}
+            for word in words:
+                if len(word) > 3:  # Only count meaningful words
+                    word_lower = word.lower()
+                    word_frequency[word_lower] = word_frequency.get(word_lower, 0) + 1
+            
+            # Find overused words
+            total_meaningful_words = sum(word_frequency.values())
+            overused_words = []
+            if total_meaningful_words > 0:
+                for word, count in word_frequency.items():
+                    if count / total_meaningful_words > 0.05:  # More than 5% of content
+                        overused_words.append(f"{word} ({count} times)")
+            
+            if overused_words:
+                score -= 5
+                issues.append("Some words may be overused")
+        else:
+            overused_words = []
         
         return {
             "word_count": word_count,
@@ -627,6 +673,8 @@ class SEOAnalyzer:
         if 'text/html' not in page_info.get('content_type', ''):
             score -= 25
             issues.append("Non-HTML content type")
+        
+        self._debug_log(f"Technical SEO - Canonical: {has_canonical}, Schema: {has_schema}")
         
         return {
             "has_canonical": has_canonical,
@@ -772,35 +820,57 @@ async def test_seo_analyzer():
     """
     Test function to verify the SEO analyzer works correctly.
     """
-    analyzer = SEOAnalyzer()
-    
+    analyzer = SEOAnalyzer(debug=True)  # Enable debug mode
     try:
         # Test with a real website
         print("Testing SEO analysis...")
-        results = await analyzer.analyze("https://www.example.com")
+        results = await analyzer.analyze("https://www.wikipedia.org")
         
-        # Display summarized results
-        print("\n--- SEO Analysis Summary ---")
-        print(f"Score: {results['score']}/100 ({results['grade']})")
-        print(f"Analyzed at: {results['analyzed_at']}")
-        print(f"Analysis Duration: {round(results['analysis_duration'], 2)} seconds\n")
+        print("\n=== SEO ANALYSIS RESULTS ===")
+        print(f"Overall Score: {results['score']}/100 ({results['grade']})")
+        print(f"Title: {results['title']['text'][:80]}..." if results['title']['exists'] else "No title")
+        print(f"Title Length: {results['title']['length']} chars")
+        print(f"Meta Description: {results['meta_description']['text'][:80]}..." if results['meta_description']['exists'] else "No meta description")
+        print(f"Meta Description Length: {results['meta_description']['length']} chars")
+        print(f"H1 Count: {results['headings']['h1_count']}")
+        print(f"Total Headings: {results['headings']['total_count']}")
+        print(f"Images: {results['images']['total_count']} ({results['images']['alt_percentage']}% with alt text)")
+        print(f"Internal Links: {results['links']['internal_count']}")
+        print(f"External Links: {results['links']['external_count']}")
+        print(f"Word Count: {results['content']['word_count']}")
         
-        print("--- Key SEO Metrics ---")
-        for key, value in results["seo_summary"].items():
-            print(f"{key}: {value}")
+        print("\n=== COMPONENT SCORES ===")
+        print(f"Title: {results['title']['score']}/100")
+        print(f"Meta Description: {results['meta_description']['score']}/100")
+        print(f"Headings: {results['headings']['score']}/100")
+        print(f"Images: {results['images']['score']}/100")
+        print(f"Links: {results['links']['score']}/100")
+        print(f"Content: {results['content']['score']}/100")
+        print(f"Technical: {results['technical']['score']}/100")
         
-        print("\n--- Recommendations ---")
-        for rec in results["recommendations"]:
-            print(f"- {rec}")
+        print("\n=== TOP RECOMMENDATIONS ===")
+        for i, rec in enumerate(results['recommendations'][:5], 1):
+            print(f"{i}. {rec}")
         
-        print("\n--- Issues ---")
-        for issue in results["issues"]:
-            print(f"- {issue}")
-    
+        if results.get('issues'):
+            print("\n=== SEO ISSUES ===")
+            for i, issue in enumerate(results['issues'][:5], 1):
+                print(f"{i}. {issue}")
+        
+        # Test with a simpler site for comparison
+        print("\n\n=== TESTING WITH EXAMPLE.COM ===")
+        results2 = await analyzer.analyze("https://example.com")
+        print(f"Example.com Score: {results2['score']}/100 ({results2['grade']})")
+        print(f"Title: '{results2['title']['text']}'")
+        print(f"Word Count: {results2['content']['word_count']}")
+        print(f"Internal Links: {results2['links']['internal_count']}")
+        
     except Exception as e:
         print(f"Test failed: {e}")
+        import traceback
+        traceback.print_exc()
 
-# Run the test asynchronously
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    # Run test if this file is executed directly
+    import asyncio
     asyncio.run(test_seo_analyzer())
