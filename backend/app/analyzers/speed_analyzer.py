@@ -161,18 +161,7 @@ class SpeedAnalyzer:
             full_load_time = time.time() - start_time
             
             # Get navigation timing from browser
-            navigation_timing = await page.evaluate("""
-                () => {
-                    const timing = performance.timing;
-                    return {
-                        dns_lookup: timing.domainLookupEnd - timing.domainLookupStart,
-                        connection: timing.connectEnd - timing.connectStart,
-                        request: timing.responseStart - timing.requestStart,
-                        response: timing.responseEnd - timing.responseStart,
-                        dom_processing: timing.domComplete - timing.domLoading
-                    };
-                }
-            """)
+            navigation_timing = await page.evaluate()
             
             metrics.update({
                 "dom_load_time": dom_load_time,
@@ -200,19 +189,13 @@ class SpeedAnalyzer:
         return metrics
     
     async def _get_core_web_vitals(self, page) -> Dict[str, float]:
-        """
-        Get Google's Core Web Vitals metrics.
-        These are the official metrics Google uses to rank websites.
-        """
         try:
             # Inject Web Vitals measurement script
             vitals_script = """
                 () => {
                     return new Promise((resolve) => {
-                        // First Contentful Paint (FCP)
                         let fcp = 0;
                         
-                        // Get FCP from Performance Observer
                         if ('PerformanceObserver' in window) {
                             try {
                                 const observer = new PerformanceObserver((list) => {
@@ -259,10 +242,6 @@ class SpeedAnalyzer:
             }
     
     async def _analyze_resource_loading(self, resource_stats: Dict) -> Dict[str, Any]:
-        """
-        Analyze patterns in resource loading.
-        This is like analyzing traffic patterns to find bottlenecks.
-        """
         requests = resource_stats["requests"]
         
         # Count resources by type
@@ -452,10 +431,6 @@ class SpeedAnalyzer:
             return "F"
     
     def _estimate_resource_size(self, resource_type: str) -> int:
-        """
-        Estimate resource size when content-length header is missing.
-        Based on typical file sizes for different resource types.
-        """
         size_estimates = {
             "document": 50000,    # 50KB for HTML
             "stylesheet": 25000,  # 25KB for CSS
