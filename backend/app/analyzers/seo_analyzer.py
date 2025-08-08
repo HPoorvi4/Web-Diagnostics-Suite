@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 
 class SEOAnalyzer:
     def __init__(self, debug=False):
-        """Initialize the SEO analyzer."""
         self.timeout = 15  # Maximum time to wait for page content
         self.debug = debug
         

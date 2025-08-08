@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 class SpeedAnalyzer:
 
     def __init__(self, browser_manager: BrowserManager):
-       
         self.browser_manager = browser_manager
         self.timeout = 30  # Maximum time to wait for page load
         
@@ -31,7 +30,6 @@ class SpeedAnalyzer:
         logger.info("SpeedAnalyzer initialized")
     
     async def analyze(self, url: str) -> Dict[str, Any]:
-       
         logger.info(f"Starting speed analysis for: {url}")
         start_time = time.time()
         
@@ -73,7 +71,6 @@ class SpeedAnalyzer:
                 results = {
                     "score": speed_score,
                     "grade": self._get_grade_from_score(speed_score),
-               
                     "load_time": load_metrics["full_load_time"],
                     "first_contentful_paint": core_vitals.get("first_contentful_paint", 0),
                     "largest_contentful_paint": core_vitals.get("largest_contentful_paint", 0),
@@ -161,7 +158,20 @@ class SpeedAnalyzer:
             full_load_time = time.time() - start_time
             
             # Get navigation timing from browser
-            navigation_timing = await page.evaluate()
+            navigation_timing = await page.evaluate("""
+                () => {
+                    const timing = performance.timing;
+                    const navigationStart = timing.navigationStart;
+                    
+                    return {
+                        dns_lookup: timing.domainLookupEnd - timing.domainLookupStart,
+                        connection: timing.connectEnd - timing.connectStart,
+                        request: timing.responseStart - timing.requestStart,
+                        response: timing.responseEnd - timing.responseStart,
+                        dom_processing: timing.domContentLoadedEventEnd - timing.responseEnd
+                    };
+                }
+            """)
             
             metrics.update({
                 "dom_load_time": dom_load_time,

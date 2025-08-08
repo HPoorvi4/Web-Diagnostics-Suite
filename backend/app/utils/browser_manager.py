@@ -1,843 +1,448 @@
 import asyncio
 import logging
-import time
-import sys
-import os
 from typing import Dict, List, Optional, Any
-from datetime import datetime
-from urllib.parse import urljoin, urlparse
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+import os
 
-# Fix import path for both direct execution and module execution
 try:
-    # Try importing from current directory structure (when run as module)
-    from browser_manager import BrowserManager, create_mobile_page_options, create_desktop_page_options
+    from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 except ImportError:
-    # Add parent directory to path and try again
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    parent_dir = os.path.join(current_dir, '..')
-    sys.path.insert(0, os.path.abspath(parent_dir))
-    
-    try:
-        from browser_manager import BrowserManager, create_mobile_page_options, create_desktop_page_options
-    except ImportError:
-        # Try adding the app directory to path (if we're deeper in structure)
-        app_dir = os.path.join(current_dir, '..', '..')
-        sys.path.insert(0, os.path.abspath(app_dir))
-        try:
-            from browser_manager import BrowserManager, create_mobile_page_options, create_desktop_page_options
-        except ImportError as e:
-            print(f"Could not import browser_manager. Make sure browser_manager.py exists in the app directory.")
-            print(f"Current directory: {current_dir}")
-            print(f"Parent directory: {os.path.abspath(parent_dir)}")
-            print(f"Error: {e}")
-            sys.exit(1)
+    raise ImportError(
+        "Playwright not installed. Install with: pip install playwright && playwright install"
+    )
 
 logger = logging.getLogger(__name__)
 
-class MobileAnalyzer:
+@dataclass
+class BrowserInstance:
     """
-    Analyzes mobile-friendliness and responsive design of websites.
+    Represents a single browser instance in our pool.
+    Like having one kitchen oven that can be used by different chefs.
+    """
+    browser: Browser
+    created_at: datetime
+    last_used: datetime
+    in_use: bool = False
+    use_count: int = 0
+    max_uses: int = 50  # Restart browser after 50 uses to prevent memory leaks
+
+class BrowserManager:
+    """
+    Manages a pool of browser instances for efficient web automation.
     
-    This analyzer checks:
-    - Viewport meta tag
-    - Responsive design across different screen sizes
-    - Touch-friendly elements
-    - Mobile load times
-    - Mobile-specific UI issues
+    Think of this as the KITCHEN EQUIPMENT MANAGER who:
+    - Keeps multiple ovens (browsers) ready for use
+    - Assigns ovens to chefs (analyzers) when needed
+    - Maintains and cleans ovens regularly
+    - Replaces old ovens when they wear out
+    
+    Why do we need this?
+    - Starting a browser is slow (3-5 seconds)
+    - We want multiple analyses to run simultaneously
+    - We need to prevent memory leaks from long-running browsers
     """
     
-    def __init__(self, browser_manager: BrowserManager):
-        self.browser_manager = browser_manager
-        
-        # Device configurations for testing
-        self.devices = {
-            "mobile_phone": {
-                "name": "iPhone 12",
-                "viewport": {"width": 390, "height": 844},
-                "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1",
-                "device_scale_factor": 3,
-                "is_mobile": True,
-                "has_touch": True
-            },
-            "tablet": {
-                "name": "iPad",
-                "viewport": {"width": 820, "height": 1180},
-                "user_agent": "Mozilla/5.0 (iPad; CPU OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1",
-                "device_scale_factor": 2,
-                "is_mobile": True,
-                "has_touch": True
-            },
-            "desktop": {
-                "name": "Desktop",
-                "viewport": {"width": 1920, "height": 1080},
-                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-                "device_scale_factor": 1,
-                "is_mobile": False,
-                "has_touch": False
-            }
-        }
-    
-    async def analyze_mobile_friendliness(self, url: str, include_screenshots: bool = False) -> Dict[str, Any]:
+    def __init__(self, pool_size: int = 3, max_idle_time: int = 300):
         """
-        Perform comprehensive mobile-friendliness analysis.
+        Initialize the browser manager.
         
         Args:
-            url: Website URL to analyze
-            include_screenshots: Whether to capture screenshots
-        
-        Returns:
-            Dict containing mobile analysis results
+            pool_size: Number of browsers to keep in the pool (like number of ovens)
+            max_idle_time: Close browsers after this many seconds of inactivity
         """
-        # Add protocol if missing
-        if not url.startswith(('http://', 'https://')):
-            url = 'https://' + url
-            
-        logger.info(f"Starting mobile analysis for {url}")
+        self.pool_size = pool_size
+        self.max_idle_time = max_idle_time
         
-        results = {
-            "url": url,
-            "analyzed_at": datetime.utcnow().isoformat(),
-            "viewport_meta": False,
-            "responsive_design": {
-                "score": 0,
-                "issues": []
-            },
-            "touch_friendly": {
-                "score": 0,
-                "interactive_elements": 0,
-                "issues": []
-            },
-            "mobile_performance": {
-                "load_time": 0,
-                "first_contentful_paint": 0,
-                "largest_contentful_paint": 0
-            },
-            "readability": {
-                "score": 0,
-                "font_size_issues": [],
-                "contrast_issues": []
-            },
-            "device_compatibility": {},
-            "screenshots": {} if include_screenshots else None,
-            "overall_score": 0,
-            "mobile_friendly_level": "Not Mobile-Friendly",
-            "critical_issues": [],
-            "recommendations": []
+        # Browser pool storage
+        self._browser_pool: List[BrowserInstance] = []
+        self._playwright = None
+        self._initialized = False
+        
+        # Locks for thread safety
+        self._pool_lock = asyncio.Lock()
+        self._cleanup_task = None
+        
+        # Statistics
+        self._total_browsers_created = 0
+        self._total_pages_opened = 0
+        
+        logger.info(f"BrowserManager initialized with pool size: {pool_size}")
+    
+    async def initialize(self):
+        """
+        Initialize the browser manager and create initial browser pool.
+        This is like warming up all the ovens before the restaurant opens.
+        """
+        if self._initialized:
+            logger.warning("BrowserManager already initialized")
+            return
+        
+        try:
+            logger.info("Initializing BrowserManager...")
+            
+            # Start Playwright
+            self._playwright = await async_playwright().start()
+            
+            # Create initial browser pool
+            await self._create_initial_pool()
+            
+            # Start cleanup task (runs every 60 seconds to maintain browsers)
+            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+            
+            self._initialized = True
+            logger.info(f"BrowserManager initialized successfully with {len(self._browser_pool)} browsers")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize BrowserManager: {e}")
+            await self.cleanup()
+            raise
+    
+    async def _create_initial_pool(self):
+        """Create the initial pool of browsers"""
+        for i in range(self.pool_size):
+            try:
+                browser_instance = await self._create_browser_instance()
+                self._browser_pool.append(browser_instance)
+                logger.info(f"Created browser {i+1}/{self.pool_size}")
+            except Exception as e:
+                logger.error(f"Failed to create browser {i+1}: {e}")
+                # Continue with fewer browsers rather than failing completely
+    
+    async def _create_browser_instance(self) -> BrowserInstance:
+        """
+        Create a single browser instance with optimized settings.
+        This is like buying and setting up a new oven.
+        """
+        if not self._playwright:
+            raise RuntimeError("Playwright not initialized")
+        
+        # Browser launch options optimized for web analysis
+        browser_options = {
+            "headless": True,  # Run without GUI (faster)
+            "args": [
+                "--no-sandbox",  # Required for some servers
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",  # Overcome limited resource problems
+                "--disable-accelerated-2d-canvas",
+                "--no-first-run",
+                "--no-zygote",
+                "--disable-gpu",  # Don't need GPU for analysis
+                "--disable-background-timer-throttling",
+                "--disable-renderer-backgrounding",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-web-security",  # Allow cross-origin requests for analysis
+                "--disable-features=TranslateUI",
+                "--disable-extensions",
+                "--disable-plugins",
+                "--disable-images",  # Don't load images (faster analysis)
+            ]
         }
         
+        # Use different browser engines based on environment
+        if os.getenv("PREFER_FIREFOX", "false").lower() == "true":
+            browser = await self._playwright.firefox.launch(**browser_options)
+        else:
+            browser = await self._playwright.chromium.launch(**browser_options)
+        
+        self._total_browsers_created += 1
+        
+        return BrowserInstance(
+            browser=browser,
+            created_at=datetime.now(),
+            last_used=datetime.now()
+        )
+    
+    @asynccontextmanager
+    async def get_browser_page(self, **page_options):
+        """
+        Get a browser page for analysis. This is the main method analyzers use.
+        
+        This is like borrowing an oven from the kitchen:
+        1. Check out an available oven
+        2. Use it for cooking
+        3. Return it when done
+        
+        Usage:
+            async with browser_manager.get_browser_page() as page:
+                await page.goto("https://example.com")
+                # Do analysis...
+            # Page automatically cleaned up here
+        """
+        if not self._initialized:
+            raise RuntimeError("BrowserManager not initialized. Call initialize() first.")
+        
+        browser_instance = None
+        context = None
+        page = None
+        
         try:
-            # 1. Check viewport meta tag
-            results["viewport_meta"] = await self._check_viewport_meta(url)
+            # Get an available browser from the pool
+            browser_instance = await self._get_available_browser()
             
-            # 2. Analyze across different devices
-            device_results = await self._analyze_device_compatibility(url, include_screenshots)
-            results["device_compatibility"] = device_results["compatibility"]
-            if include_screenshots:
-                results["screenshots"] = device_results["screenshots"]
+            # Create a new context (like a clean workspace)
+            context_options = {
+                "viewport": {"width": 1920, "height": 1080},  # Default desktop size
+                "user_agent": "WebAudit-Pro/1.0 (Website Analysis Bot)",
+                "ignore_https_errors": True,  # Ignore SSL errors for analysis
+                **page_options
+            }
             
-            # 3. Analyze responsive design
-            results["responsive_design"] = await self._analyze_responsive_design(url)
+            context = await browser_instance.browser.new_context(**context_options)
             
-            # 4. Check touch-friendliness
-            results["touch_friendly"] = await self._analyze_touch_friendliness(url)
+            # Create a new page
+            page = await context.new_page()
             
-            # 5. Analyze mobile readability
-            results["readability"] = await self._analyze_mobile_readability(url)
+            # Set reasonable timeouts
+            page.set_default_timeout(30000)  # 30 seconds
             
-            # 6. Check mobile performance
-            results["mobile_performance"] = await self._analyze_mobile_performance(url)
+            # Update usage statistics
+            browser_instance.use_count += 1
+            browser_instance.last_used = datetime.now()
+            self._total_pages_opened += 1
             
-            # Calculate overall score
-            results["overall_score"] = self._calculate_mobile_score(results)
-            results["mobile_friendly_level"] = self._get_mobile_friendly_level(results["overall_score"])
+            logger.debug(f"Provided browser page (uses: {browser_instance.use_count})")
             
-            # Generate issues and recommendations
-            results["critical_issues"] = self._identify_critical_issues(results)
-            results["recommendations"] = self._generate_mobile_recommendations(results)
-            
-            logger.info(f"Mobile analysis completed for {url} - Score: {results['overall_score']}")
+            yield page
             
         except Exception as e:
-            logger.error(f"Mobile analysis failed for {url}: {e}")
-            results["error"] = str(e)
-        
-        return results
-    
-    async def _check_viewport_meta(self, url: str) -> bool:
-        """Check if the page has a proper viewport meta tag"""
-        try:
-            async with self.browser_manager.get_browser_page() as page:
-                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                
-                # Check for viewport meta tag
-                viewport_meta = await page.query_selector('meta[name="viewport"]')
-                if viewport_meta:
-                    content = await viewport_meta.get_attribute("content")
-                    # Check if it has proper mobile viewport settings
-                    return "width=device-width" in content.lower() if content else False
-                
-                return False
-                
-        except Exception as e:
-            logger.error(f"Viewport meta check failed: {e}")
-            return False
-    
-    async def _analyze_device_compatibility(self, url: str, include_screenshots: bool = False) -> Dict[str, Any]:
-        """Analyze how the website performs across different devices"""
-        compatibility_results = {}
-        screenshots = {}
-        
-        for device_type, device_config in self.devices.items():
+            logger.error(f"Error providing browser page: {e}")
+            raise
+        finally:
+            # Cleanup resources
             try:
-                logger.info(f"Testing device compatibility for {device_config['name']}")
-                
-                async with self.browser_manager.get_browser_page(**device_config) as page:
-                    start_time = time.time()
-                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                    load_time = time.time() - start_time
+                if page:
+                    await page.close()
+                if context:
+                    await context.close()
+                if browser_instance:
+                    browser_instance.in_use = False
                     
-                    # Get page dimensions and content
-                    page_info = await page.evaluate("""
-                        () => {
-                            return {
-                                scrollWidth: document.documentElement.scrollWidth,
-                                scrollHeight: document.documentElement.scrollHeight,
-                                clientWidth: document.documentElement.clientWidth,
-                                clientHeight: document.documentElement.clientHeight,
-                                hasHorizontalScroll: document.documentElement.scrollWidth > window.innerWidth,
-                                hasVerticalScroll: document.documentElement.scrollHeight > window.innerHeight,
-                                viewportWidth: window.innerWidth,
-                                viewportHeight: window.innerHeight
-                            }
-                        }
-                    """)
-                    
-                    compatibility_results[device_type] = {
-                        "device_name": device_config["name"],
-                        "viewport": device_config["viewport"],
-                        "load_time": load_time,
-                        "page_dimensions": page_info,
-                        "has_horizontal_scroll": page_info["hasHorizontalScroll"],
-                        "responsive": not page_info["hasHorizontalScroll"]
-                    }
-                    
-                    # Capture screenshot if requested
-                    if include_screenshots:
-                        try:
-                            screenshot_buffer = await page.screenshot(full_page=True, type="png")
-                            screenshots[device_type] = {
-                                "device_name": device_config["name"],
-                                "data": screenshot_buffer,
-                                "dimensions": device_config["viewport"]
-                            }
-                            logger.info(f"Screenshot captured for {device_config['name']}")
-                        except Exception as e:
-                            logger.error(f"Screenshot capture failed for {device_config['name']}: {e}")
-                    
+                    # If browser has been used too much, mark it for replacement
+                    if browser_instance.use_count >= browser_instance.max_uses:
+                        await self._replace_browser_instance(browser_instance)
+                        
             except Exception as e:
-                logger.error(f"Device analysis failed for {device_type}: {e}")
-                compatibility_results[device_type] = {
-                    "device_name": device_config["name"],
-                    "error": str(e),
-                    "responsive": False
-                }
+                logger.error(f"Error during browser page cleanup: {e}")
+    
+    async def _get_available_browser(self) -> BrowserInstance:
+        """
+        Get an available browser from the pool.
+        If all are busy, wait for one to become available.
+        """
+        async with self._pool_lock:
+            # First, try to find an available browser
+            for browser_instance in self._browser_pool:
+                if not browser_instance.in_use:
+                    browser_instance.in_use = True
+                    return browser_instance
+            
+            # If no browsers available, create a temporary one
+            logger.warning("All browsers busy, creating temporary browser")
+            temp_browser = await self._create_browser_instance()
+            temp_browser.in_use = True
+            return temp_browser
+    
+    async def _replace_browser_instance(self, old_instance: BrowserInstance):
+        """
+        Replace an old browser instance with a fresh one.
+        This is like replacing an old oven that's getting worn out.
+        """
+        async with self._pool_lock:
+            try:
+                # Remove old browser from pool
+                if old_instance in self._browser_pool:
+                    self._browser_pool.remove(old_instance)
+                
+                # Close the old browser
+                await old_instance.browser.close()
+                
+                # Create a new browser to replace it
+                new_instance = await self._create_browser_instance()
+                self._browser_pool.append(new_instance)
+                
+                logger.info(f"Replaced browser instance (old uses: {old_instance.use_count})")
+                
+            except Exception as e:
+                logger.error(f"Error replacing browser instance: {e}")
+    
+    async def _cleanup_loop(self):
+        """
+        Background task that runs every minute to maintain the browser pool.
+        This is like a janitor who cleans and maintains the kitchen equipment.
+        """
+        while self._initialized:
+            try:
+                await asyncio.sleep(60)  # Check every minute
+                await self._cleanup_idle_browsers()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in cleanup loop: {e}")
+    
+    async def _cleanup_idle_browsers(self):
+        """Remove browsers that have been idle for too long"""
+        if not self._initialized:
+            return
+        
+        async with self._pool_lock:
+            current_time = datetime.now()
+            browsers_to_remove = []
+            
+            for browser_instance in self._browser_pool:
+                # Check if browser has been idle too long
+                idle_time = current_time - browser_instance.last_used
+                
+                if (not browser_instance.in_use and 
+                    idle_time > timedelta(seconds=self.max_idle_time) and
+                    len(self._browser_pool) > 1):  # Always keep at least 1 browser
+                    
+                    browsers_to_remove.append(browser_instance)
+            
+            # Remove idle browsers
+            for browser_instance in browsers_to_remove:
+                try:
+                    self._browser_pool.remove(browser_instance)
+                    await browser_instance.browser.close()
+                    logger.info(f"Removed idle browser (idle for {idle_time.total_seconds():.0f}s)")
+                except Exception as e:
+                    logger.error(f"Error removing idle browser: {e}")
+            
+            # Ensure we have minimum number of browsers
+            while len(self._browser_pool) < min(2, self.pool_size):
+                try:
+                    new_instance = await self._create_browser_instance()
+                    self._browser_pool.append(new_instance)
+                    logger.info("Created browser to maintain minimum pool size")
+                except Exception as e:
+                    logger.error(f"Error creating replacement browser: {e}")
+                    break
+    
+    async def cleanup(self):
+        """
+        Clean up all resources when shutting down.
+        This is like closing the kitchen and turning off all equipment.
+        """
+        logger.info("Starting BrowserManager cleanup...")
+        
+        self._initialized = False
+        
+        # Cancel cleanup task
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Close all browsers
+        async with self._pool_lock:
+            for browser_instance in self._browser_pool:
+                try:
+                    await browser_instance.browser.close()
+                except Exception as e:
+                    logger.error(f"Error closing browser: {e}")
+            
+            self._browser_pool.clear()
+        
+        # Stop Playwright
+        if self._playwright:
+            try:
+                await self._playwright.stop()
+            except Exception as e:
+                logger.error(f"Error stopping Playwright: {e}")
+        
+        logger.info("BrowserManager cleanup complete")
+    
+    def is_ready(self) -> bool:
+        """Check if the browser manager is ready to handle requests"""
+        return self._initialized and len(self._browser_pool) > 0
+    
+    def get_pool_size(self) -> int:
+        """Get current number of browsers in pool"""
+        return len(self._browser_pool)
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get browser manager statistics"""
+        active_browsers = sum(1 for b in self._browser_pool if b.in_use)
         
         return {
-            "compatibility": compatibility_results,
-            "screenshots": screenshots if include_screenshots else {}
+            "pool_size": len(self._browser_pool),
+            "active_browsers": active_browsers,
+            "available_browsers": len(self._browser_pool) - active_browsers,
+            "total_browsers_created": self._total_browsers_created,
+            "total_pages_opened": self._total_pages_opened,
+            "is_ready": self.is_ready()
         }
-    
-    async def _analyze_responsive_design(self, url: str) -> Dict[str, Any]:
-        """Analyze responsive design implementation"""
-        try:
-            async with self.browser_manager.get_browser_page() as page:
-                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                
-                # Check for CSS media queries
-                media_queries = await page.evaluate("""
-                    () => {
-                        const styleSheets = Array.from(document.styleSheets);
-                        let mediaQueries = [];
-                        
-                        try {
-                            styleSheets.forEach(sheet => {
-                                if (sheet.cssRules) {
-                                    Array.from(sheet.cssRules).forEach(rule => {
-                                        if (rule.type === CSSRule.MEDIA_RULE) {
-                                            mediaQueries.push(rule.media.mediaText);
-                                        }
-                                    });
-                                }
-                            });
-                        } catch (e) {
-                            // Can't access cross-origin stylesheets
-                        }
-                        
-                        return mediaQueries;
-                    }
-                """)
-                
-                # Check for flexible layouts
-                flexible_elements = await page.evaluate("""
-                    () => {
-                        const elements = Array.from(document.querySelectorAll('*'));
-                        let flexibleCount = 0;
-                        
-                        elements.forEach(el => {
-                            const style = window.getComputedStyle(el);
-                            if (style.display === 'flex' || 
-                                style.display === 'grid' || 
-                                style.width.includes('%') ||
-                                style.maxWidth.includes('%') ||
-                                style.minWidth.includes('%')) {
-                                flexibleCount++;
-                            }
-                        });
-                        
-                        return {
-                            total_elements: elements.length,
-                            flexible_elements: flexibleCount,
-                            percentage: flexibleCount / elements.length * 100
-                        };
-                    }
-                """)
-                
-                # Calculate responsive score
-                responsive_score = 0
-                issues = []
-                
-                # Media queries check (30 points)
-                if media_queries and len(media_queries) > 0:
-                    responsive_score += 30
-                else:
-                    issues.append("No CSS media queries detected")
-                
-                # Flexible layout check (40 points)
-                if flexible_elements["percentage"] > 20:
-                    responsive_score += 40
-                elif flexible_elements["percentage"] > 10:
-                    responsive_score += 20
-                else:
-                    issues.append("Limited use of flexible layouts")
-                
-                # Viewport meta tag check (30 points)
-                has_viewport = await self._check_viewport_meta(url)
-                if has_viewport:
-                    responsive_score += 30
-                else:
-                    issues.append("Missing or improper viewport meta tag")
-                
-                return {
-                    "score": min(responsive_score, 100),
-                    "media_queries": len(media_queries),
-                    "flexible_elements": flexible_elements,
-                    "issues": issues
-                }
-                
-        except Exception as e:
-            logger.error(f"Responsive design analysis failed: {e}")
-            return {
-                "score": 0,
-                "issues": [f"Analysis failed: {str(e)}"]
-            }
-    
-    async def _analyze_touch_friendliness(self, url: str) -> Dict[str, Any]:
-        """Analyze touch-friendly design elements"""
-        try:
-            mobile_options = await create_mobile_page_options()
-            async with self.browser_manager.get_browser_page(**mobile_options) as page:
-                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                
-                # Analyze interactive elements
-                touch_analysis = await page.evaluate("""
-                    () => {
-                        const interactiveSelectors = 'a, button, input, select, textarea, [onclick], [role="button"]';
-                        const elements = Array.from(document.querySelectorAll(interactiveSelectors));
-                        
-                        let touchFriendlyCount = 0;
-                        let totalElements = elements.length;
-                        let smallElements = [];
-                        
-                        elements.forEach((el, index) => {
-                            const rect = el.getBoundingClientRect();
-                            const minSize = 44; // Apple's recommended minimum touch target size
-                            
-                            if (rect.width >= minSize && rect.height >= minSize) {
-                                touchFriendlyCount++;
-                            } else {
-                                smallElements.push({
-                                    tag: el.tagName.toLowerCase(),
-                                    width: Math.round(rect.width),
-                                    height: Math.round(rect.height),
-                                    text: el.textContent ? el.textContent.slice(0, 30) : ''
-                                });
-                            }
-                        });
-                        
-                        // Check spacing between elements
-                        let crowdedElements = 0;
-                        elements.forEach(el => {
-                            const rect = el.getBoundingClientRect();
-                            const nearby = elements.filter(other => {
-                                if (other === el) return false;
-                                const otherRect = other.getBoundingClientRect();
-                                const distance = Math.sqrt(
-                                    Math.pow(rect.left - otherRect.left, 2) + 
-                                    Math.pow(rect.top - otherRect.top, 2)
-                                );
-                                return distance < 48; // Less than recommended spacing
-                            });
-                            if (nearby.length > 0) crowdedElements++;
-                        });
-                        
-                        return {
-                            total_interactive: totalElements,
-                            touch_friendly: touchFriendlyCount,
-                            small_elements: smallElements.slice(0, 10), // Limit to 10 examples
-                            crowded_elements: crowdedElements,
-                            percentage: totalElements > 0 ? (touchFriendlyCount / totalElements) * 100 : 0
-                        };
-                    }
-                """)
-                
-                # Calculate touch score
-                touch_score = 0
-                issues = []
-                
-                if touch_analysis["percentage"] >= 80:
-                    touch_score = 90
-                elif touch_analysis["percentage"] >= 60:
-                    touch_score = 70
-                elif touch_analysis["percentage"] >= 40:
-                    touch_score = 50
-                else:
-                    touch_score = 30
-                
-                # Penalties for issues
-                if len(touch_analysis["small_elements"]) > 0:
-                    issues.append(f"{len(touch_analysis['small_elements'])} elements are too small for touch")
-                    touch_score = max(0, touch_score - 20)
-                
-                if touch_analysis["crowded_elements"] > 5:
-                    issues.append("Interactive elements are too close together")
-                    touch_score = max(0, touch_score - 15)
-                
-                return {
-                    "score": touch_score,
-                    "interactive_elements": touch_analysis["total_interactive"],
-                    "touch_friendly_percentage": touch_analysis["percentage"],
-                    "small_elements": touch_analysis["small_elements"],
-                    "issues": issues
-                }
-                
-        except Exception as e:
-            logger.error(f"Touch-friendliness analysis failed: {e}")
-            return {
-                "score": 0,
-                "interactive_elements": 0,
-                "issues": [f"Analysis failed: {str(e)}"]
-            }
-    
-    async def _analyze_mobile_readability(self, url: str) -> Dict[str, Any]:
-        """Analyze mobile readability factors"""
-        try:
-            mobile_options = await create_mobile_page_options()
-            async with self.browser_manager.get_browser_page(**mobile_options) as page:
-                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                
-                readability_analysis = await page.evaluate("""
-                    () => {
-                        const textElements = Array.from(document.querySelectorAll('p, span, div, li, td, th, h1, h2, h3, h4, h5, h6'));
-                        let fontSizeIssues = [];
-                        let totalTextElements = 0;
-                        let readableElements = 0;
-                        
-                        textElements.forEach((el, index) => {
-                            const style = window.getComputedStyle(el);
-                            const fontSize = parseFloat(style.fontSize);
-                            const hasText = el.textContent && el.textContent.trim().length > 0;
-                            
-                            if (hasText) {
-                                totalTextElements++;
-                                
-                                if (fontSize >= 16) { // Recommended minimum for mobile
-                                    readableElements++;
-                                } else {
-                                    fontSizeIssues.push({
-                                        tag: el.tagName.toLowerCase(),
-                                        fontSize: fontSize,
-                                        text: el.textContent.slice(0, 50)
-                                    });
-                                }
-                            }
-                        });
-                        
-                        // Check line height
-                        let lineHeightIssues = 0;
-                        textElements.forEach(el => {
-                            const style = window.getComputedStyle(el);
-                            const lineHeight = parseFloat(style.lineHeight);
-                            const fontSize = parseFloat(style.fontSize);
-                            const ratio = lineHeight / fontSize;
-                            
-                            if (ratio < 1.4) { // Recommended minimum line height ratio
-                                lineHeightIssues++;
-                            }
-                        });
-                        
-                        return {
-                            total_text_elements: totalTextElements,
-                            readable_elements: readableElements,
-                            font_size_issues: fontSizeIssues.slice(0, 10),
-                            line_height_issues: lineHeightIssues,
-                            readability_percentage: totalTextElements > 0 ? (readableElements / totalTextElements) * 100 : 0
-                        };
-                    }
-                """)
-                
-                # Calculate readability score
-                readability_score = 0
-                issues = []
-                
-                if readability_analysis["readability_percentage"] >= 90:
-                    readability_score = 95
-                elif readability_analysis["readability_percentage"] >= 75:
-                    readability_score = 80
-                elif readability_analysis["readability_percentage"] >= 50:
-                    readability_score = 60
-                else:
-                    readability_score = 40
-                
-                # Add specific issues
-                if len(readability_analysis["font_size_issues"]) > 0:
-                    issues.append(f"{len(readability_analysis['font_size_issues'])} elements have font size below 16px")
-                
-                if readability_analysis["line_height_issues"] > 5:
-                    issues.append("Poor line height spacing detected")
-                    readability_score = max(0, readability_score - 10)
-                
-                return {
-                    "score": readability_score,
-                    "font_size_issues": readability_analysis["font_size_issues"],
-                    "readability_percentage": readability_analysis["readability_percentage"],
-                    "issues": issues
-                }
-                
-        except Exception as e:
-            logger.error(f"Mobile readability analysis failed: {e}")
-            return {
-                "score": 0,
-                "font_size_issues": [],
-                "issues": [f"Analysis failed: {str(e)}"]
-            }
-    
-    async def _analyze_mobile_performance(self, url: str) -> Dict[str, Any]:
-        """Analyze mobile-specific performance metrics"""
-        try:
-            mobile_options = await create_mobile_page_options()
-            async with self.browser_manager.get_browser_page(**mobile_options) as page:
-                start_time = time.time()
-                
-                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                load_time = time.time() - start_time
-                
-                # Get performance metrics
-                performance_metrics = await page.evaluate("""
-                    () => {
-                        const perfData = performance.getEntriesByType('navigation')[0];
-                        return {
-                            loadEventEnd: perfData ? perfData.loadEventEnd : 0,
-                            domContentLoadedEventEnd: perfData ? perfData.domContentLoadedEventEnd : 0,
-                            firstContentfulPaint: 0, // Would need PerformanceObserver for real FCP
-                            largestContentfulPaint: 0 // Would need PerformanceObserver for real LCP
-                        };
-                    }
-                """)
-                
-                # Simulate mobile network conditions performance (basic estimation)
-                return {
-                    "load_time": load_time,
-                    "first_contentful_paint": performance_metrics["firstContentfulPaint"] or load_time * 0.6,
-                    "largest_contentful_paint": performance_metrics["largestContentfulPaint"] or load_time * 0.8,
-                    "dom_content_loaded": performance_metrics["domContentLoadedEventEnd"] / 1000 if performance_metrics["domContentLoadedEventEnd"] else load_time * 0.7
-                }
-                
-        except Exception as e:
-            logger.error(f"Mobile performance analysis failed: {e}")
-            return {
-                "load_time": 30.0,  # Timeout fallback
-                "first_contentful_paint": 0,
-                "largest_contentful_paint": 0,
-                "dom_content_loaded": 0
-            }
-    
-    def _calculate_mobile_score(self, results: Dict[str, Any]) -> int:
-        """Calculate overall mobile-friendliness score"""
-        scores = []
-        weights = []
-        
-        # Viewport meta tag (15% weight)
-        if results.get("viewport_meta"):
-            scores.append(100)
-            weights.append(0.15)
-        else:
-            scores.append(0)
-            weights.append(0.15)
-        
-        # Responsive design (25% weight)
-        responsive_score = results.get("responsive_design", {}).get("score", 0)
-        scores.append(responsive_score)
-        weights.append(0.25)
-        
-        # Touch-friendliness (20% weight)
-        touch_score = results.get("touch_friendly", {}).get("score", 0)
-        scores.append(touch_score)
-        weights.append(0.20)
-        
-        # Readability (20% weight)
-        readability_score = results.get("readability", {}).get("score", 0)
-        scores.append(readability_score)
-        weights.append(0.20)
-        
-        # Mobile performance (20% weight)
-        performance = results.get("mobile_performance", {})
-        load_time = performance.get("load_time", 30)
-        
-        if load_time <= 2:
-            perf_score = 100
-        elif load_time <= 3:
-            perf_score = 85
-        elif load_time <= 5:
-            perf_score = 70
-        elif load_time <= 8:
-            perf_score = 50
-        else:
-            perf_score = 20
-        
-        scores.append(perf_score)
-        weights.append(0.20)
-        
-        # Calculate weighted average
-        if sum(weights) > 0:
-            weighted_score = sum(score * weight for score, weight in zip(scores, weights)) / sum(weights)
-            return int(round(weighted_score))
-        
-        return 0
-    
-    def _get_mobile_friendly_level(self, score: int) -> str:
-        """Get mobile-friendly level based on score"""
-        if score >= 90:
-            return "Excellent Mobile Experience"
-        elif score >= 75:
-            return "Good Mobile Experience"
-        elif score >= 60:
-            return "Mobile-Friendly"
-        elif score >= 40:
-            return "Partially Mobile-Friendly"
-        else:
-            return "Not Mobile-Friendly"
-    
-    def _identify_critical_issues(self, results: Dict[str, Any]) -> List[str]:
-        """Identify critical mobile issues"""
-        critical_issues = []
-        
-        # Viewport meta tag
-        if not results.get("viewport_meta"):
-            critical_issues.append("CRITICAL: No viewport meta tag - site will not display properly on mobile")
-        
-        # Responsive design issues
-        device_compatibility = results.get("device_compatibility", {})
-        non_responsive_devices = []
-        for device_type, device_data in device_compatibility.items():
-            if isinstance(device_data, dict) and device_data.get("has_horizontal_scroll"):
-                non_responsive_devices.append(device_type)
-        
-        if non_responsive_devices:
-            critical_issues.append(f"HIGH: Horizontal scrolling on {', '.join(non_responsive_devices)} devices")
-        
-        # Performance issues
-        mobile_performance = results.get("mobile_performance", {})
-        load_time = mobile_performance.get("load_time", 0)
-        if load_time > 8:
-            critical_issues.append("CRITICAL: Mobile page load time exceeds 8 seconds")
-        elif load_time > 5:
-            critical_issues.append("HIGH: Mobile page load time exceeds 5 seconds")
-        
-        # Touch-friendliness issues
-        touch_data = results.get("touch_friendly", {})
-        if touch_data.get("score", 0) < 40:
-            critical_issues.append("HIGH: Many interactive elements are not touch-friendly")
-        
-        return critical_issues
-    
-    def _generate_mobile_recommendations(self, results: Dict[str, Any]) -> List[str]:
-        """Generate mobile optimization recommendations"""
-        recommendations = []
-        
-        # Viewport recommendations
-        if not results.get("viewport_meta"):
-            recommendations.append("URGENT: Add viewport meta tag: <meta name='viewport' content='width=device-width, initial-scale=1'>")
-        
-        # Responsive design recommendations
-        responsive_data = results.get("responsive_design", {})
-        if responsive_data.get("score", 0) < 70:
-            recommendations.append("Fix horizontal scrolling by implementing proper responsive CSS")
-            recommendations.append("Use CSS media queries to adapt layout for different screen sizes")
-        
-        # Performance recommendations
-        mobile_performance = results.get("mobile_performance", {})
-        load_time = mobile_performance.get("load_time", 0)
-        if load_time > 3:
-            recommendations.append("Optimize mobile page load time to under 3 seconds")
-            recommendations.append("Compress and optimize images for mobile devices")
-        
-        # Touch-friendliness recommendations
-        touch_data = results.get("touch_friendly", {})
-        if touch_data.get("score", 0) < 70:
-            recommendations.append("Increase touch target sizes to at least 44x44 pixels")
-            recommendations.append("Add more spacing between interactive elements")
-        
-        # Readability recommendations
-        readability_data = results.get("readability", {})
-        if readability_data.get("score", 0) < 70:
-            recommendations.append("Increase font sizes to at least 16px for body text")
-            recommendations.append("Improve line height for better readability")
-        
-        # General recommendations
-        if not recommendations:
-            recommendations.append("Great mobile optimization! Consider testing on more devices")
-        else:
-            recommendations.append("Add mobile-specific CSS with media queries")
-        
-        return recommendations[:6]  # Limit to top 6 recommendations
 
+# Helper functions for common browser configurations
 
-# Utility function for CLI testing
-async def test_mobile_analyzer(url: str = None):
-    """Test function for mobile analyzer"""
-    browser_manager = BrowserManager(pool_size=2)
+async def create_mobile_page_options():
+    """
+    Get page options configured for mobile testing.
+    This simulates an iPhone viewport.
+    """
+    return {
+        "viewport": {"width": 375, "height": 667},
+        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15",
+        "device_scale_factor": 2,
+        "is_mobile": True,
+        "has_touch": True
+    }
+
+async def create_desktop_page_options():
+    """
+    Get page options configured for desktop testing.
+    This simulates a standard desktop browser.
+    """
+    return {
+        "viewport": {"width": 1920, "height": 1080},
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "device_scale_factor": 1,
+        "is_mobile": False,
+        "has_touch": False
+    }
+
+# Example usage and testing functions
+async def test_browser_manager():
+    """
+    Test function to verify the browser manager works correctly.
+    This demonstrates how to use the browser manager.
+    """
+    manager = BrowserManager(pool_size=2)
     
     try:
-        await browser_manager.initialize()
-        analyzer = MobileAnalyzer(browser_manager)
+        print("Initializing browser manager...")
+        await manager.initialize()
         
-        # Use provided URL or default
-        test_url = url or "https://www.wikipedia.org"
+        print(f"Browser manager ready: {manager.is_ready()}")
+        print(f"Initial stats: {manager.get_stats()}")
         
-        print(f"Testing mobile analysis for: {test_url}")
-        results = await analyzer.analyze_mobile_friendliness(test_url, include_screenshots=True)
+        # Test getting a browser page
+        print("\nTesting browser page...")
+        async with manager.get_browser_page() as page:
+            await page.goto("https://example.com")
+            title = await page.title()
+            print(f"Page title: {title}")
         
-        print(f"\n=== MOBILE ANALYSIS RESULTS ===")
-        print(f"Overall Score: {results['overall_score']}/100 ({_get_grade(results['overall_score'])})")
-        print(f"Mobile-Friendly Level: {results['mobile_friendly_level']}")
+        # Test mobile page
+        print("\nTesting mobile page...")
+        mobile_options = await create_mobile_page_options()
+        async with manager.get_browser_page(**mobile_options) as page:
+            await page.goto("https://example.com")
+            viewport = page.viewport_size
+            print(f"Mobile viewport: {viewport}")
         
-        print(f"\nViewport Meta Tag: {'✓' if results['viewport_meta'] else '✗'}")
-        print(f"Responsive Design: {results['responsive_design']['score']:.1f}%")
-        
-        # Show device compatibility
-        device_issues = []
-        for device_type, device_data in results['device_compatibility'].items():
-            if isinstance(device_data, dict) and device_data.get('has_horizontal_scroll'):
-                device_issues.append(device_type)
-        
-        if device_issues:
-            print(f"  Issues on: {', '.join(device_issues)}")
-        
-        print(f"Touch-Friendly Elements: {results['touch_friendly']['score']:.1f}%")
-        print(f"Interactive Elements: {results['touch_friendly']['interactive_elements']}")
-        print(f"Mobile Load Time: {results['mobile_performance']['load_time']:.2f}s")
-        
-        if results.get('screenshots'):
-            print(f"\nScreenshots captured: {len(results['screenshots'])} devices")
-        
-        # Show critical issues
-        if results['critical_issues']:
-            print(f"\n=== MOBILE ISSUES ===")
-            for i, issue in enumerate(results['critical_issues'], 1):
-                print(f"{i}. {issue}")
-        
-        # Show recommendations
-        if results['recommendations']:
-            print(f"\n=== TOP MOBILE RECOMMENDATIONS ===")
-            for i, rec in enumerate(results['recommendations'], 1):
-                print(f"{i}. {rec}")
-        
-        # Score breakdown
-        print(f"\n=== SCORE BREAKDOWN ===")
-        print(f"Viewport Score: {100 if results['viewport_meta'] else 0}/100")
-        print(f"Responsive Score: {results['responsive_design']['score']}/100")
-        print(f"Touch Score: {results['touch_friendly']['score']}/100")
-        print(f"Readability Score: {results['readability']['score']}/100")
-        
-        # Performance score calculation
-        load_time = results['mobile_performance']['load_time']
-        if load_time <= 2:
-            perf_score = 100
-        elif load_time <= 3:
-            perf_score = 85
-        elif load_time <= 5:
-            perf_score = 70
-        elif load_time <= 8:
-            perf_score = 50
-        else:
-            perf_score = 20
-        
-        print(f"Performance Score: {perf_score}/100")
+        print(f"\nFinal stats: {manager.get_stats()}")
         
     except Exception as e:
-        print(f"Analysis failed: {e}")
+        print(f"Test failed: {e}")
     finally:
-        await browser_manager.cleanup()
-
-
-def _get_grade(score: int) -> str:
-    """Get letter grade from score"""
-    if score >= 90:
-        return "A"
-    elif score >= 80:
-        return "B"
-    elif score >= 70:
-        return "C"
-    elif score >= 60:
-        return "D"
-    else:
-        return "F"
-
-
-# Main execution logic
-async def main():
-    """Main function to handle command line execution"""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description='Mobile-Friendliness Analyzer')
-    parser.add_argument('url', nargs='?', help='URL to analyze', default=None)
-    parser.add_argument('--screenshots', action='store_true', help='Include screenshots')
-    
-    # Handle both direct execution and module execution
-    if len(sys.argv) > 1 and not sys.argv[1].startswith('-'):
-        # Direct URL argument (for backward compatibility)
-        url = sys.argv[1]
-        include_screenshots = '--screenshots' in sys.argv
-    else:
-        # Use argparse for more complex argument handling
-        args = parser.parse_args()
-        url = args.url
-        include_screenshots = args.screenshots
-    
-    if not url:
-        print("Usage: python -m analyzers.mobile_analyzer <url> [--screenshots]")
-        print("Example: python -m analyzers.mobile_analyzer www.wikipedia.org")
-        return
-    
-    await test_mobile_analyzer(url)
-
+        await manager.cleanup()
+        print("Browser manager cleaned up")
 
 if __name__ == "__main__":
-    # Set up logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    # Run the main function
-    asyncio.run(main())
+    # Run test if this file is executed directly
+    import asyncio
+    asyncio.run(test_browser_manager())

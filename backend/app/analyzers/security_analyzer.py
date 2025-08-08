@@ -9,9 +9,12 @@ from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
 import json
 import re
+import os
+import sys
 
-# Browser manager for getting browser instances
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils.browser_manager import BrowserManager
+
 
 logger = logging.getLogger(__name__)
 
