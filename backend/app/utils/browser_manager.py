@@ -5,6 +5,15 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import os
+import sys
+
+# Windows-specific fix for asyncio subprocess issues
+if sys.platform.startswith('win'):
+    # Set the event loop policy to ProactorEventLoop on Windows
+    if hasattr(asyncio, 'WindowsProactorEventLoopPolicy'):
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    # Alternative: Use SelectorEventLoop which sometimes works better
+    # asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 try:
     from playwright.async_api import async_playwright, Browser, BrowserContext, Page
@@ -82,8 +91,25 @@ class BrowserManager:
         try:
             logger.info("Initializing BrowserManager...")
             
-            # Start Playwright
-            self._playwright = await async_playwright().start()
+            # Windows-specific: Ensure we have the right event loop
+            if sys.platform.startswith('win'):
+                loop = asyncio.get_running_loop()
+                logger.info(f"Running on Windows with event loop: {type(loop).__name__}")
+            
+            # Start Playwright with error handling for Windows
+            try:
+                self._playwright = await async_playwright().start()
+            except NotImplementedError as e:
+                logger.error("Windows subprocess error. Trying alternative event loop...")
+                # Try switching event loop policy
+                if sys.platform.startswith('win'):
+                    try:
+                        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+                        # We need to create a new event loop
+                        raise RuntimeError("Event loop policy changed. Please restart the application.")
+                    except Exception:
+                        pass
+                raise e
             
             # Create initial browser pool
             await self._create_initial_pool()
@@ -139,6 +165,14 @@ class BrowserManager:
                 "--disable-images",  # Don't load images (faster analysis)
             ]
         }
+        
+        # Windows-specific browser options
+        if sys.platform.startswith('win'):
+            browser_options["args"].extend([
+                "--disable-background-networking",
+                "--disable-default-apps",
+                "--disable-sync",
+            ])
         
         # Use different browser engines based on environment
         if os.getenv("PREFER_FIREFOX", "false").lower() == "true":
@@ -378,7 +412,7 @@ class BrowserManager:
 
 # Helper functions for common browser configurations
 
-async def create_mobile_page_options():
+def create_mobile_page_options():
     """
     Get page options configured for mobile testing.
     This simulates an iPhone viewport.
@@ -391,7 +425,7 @@ async def create_mobile_page_options():
         "has_touch": True
     }
 
-async def create_desktop_page_options():
+def create_desktop_page_options():
     """
     Get page options configured for desktop testing.
     This simulates a standard desktop browser.
@@ -403,6 +437,32 @@ async def create_desktop_page_options():
         "is_mobile": False,
         "has_touch": False
     }
+
+# Windows-specific event loop management
+def setup_windows_event_loop():
+    """
+    Set up the proper event loop for Windows.
+    Call this before running asyncio code on Windows.
+    """
+    if sys.platform.startswith('win'):
+        # Try ProactorEventLoop first (better for subprocess)
+        try:
+            loop = asyncio.ProactorEventLoop()
+            asyncio.set_event_loop(loop)
+            print("Using ProactorEventLoop on Windows")
+            return loop
+        except:
+            # Fall back to SelectorEventLoop
+            try:
+                loop = asyncio.SelectorEventLoop()
+                asyncio.set_event_loop(loop)
+                print("Using SelectorEventLoop on Windows")
+                return loop
+            except:
+                print("Using default event loop on Windows")
+                return asyncio.get_event_loop()
+    else:
+        return asyncio.get_event_loop()
 
 # Example usage and testing functions
 async def test_browser_manager():
@@ -428,7 +488,7 @@ async def test_browser_manager():
         
         # Test mobile page
         print("\nTesting mobile page...")
-        mobile_options = await create_mobile_page_options()
+        mobile_options = create_mobile_page_options()
         async with manager.get_browser_page(**mobile_options) as page:
             await page.goto("https://example.com")
             viewport = page.viewport_size
@@ -438,11 +498,20 @@ async def test_browser_manager():
         
     except Exception as e:
         print(f"Test failed: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         await manager.cleanup()
         print("Browser manager cleaned up")
 
-if __name__ == "__main__":
-    # Run test if this file is executed directly
-    import asyncio
+def main():
+    """Main function with proper Windows event loop setup"""
+    if sys.platform.startswith('win'):
+        # Set up Windows event loop
+        setup_windows_event_loop()
+    
+    # Run the test
     asyncio.run(test_browser_manager())
+
+if __name__ == "__main__":
+    main()

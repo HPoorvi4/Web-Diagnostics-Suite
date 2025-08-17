@@ -1,147 +1,385 @@
-// src/pages/Home.jsx
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import AnalyzeForm from "../components/AnalyzeForm";
 import ResultsCard from "../components/ResultsCard";
 import Layout from "../components/Layout";
 
 const Home = () => {
-  const [analysisResult, setAnalysisResult] = useState(null);
-  const [showResults, setShowResults] = useState(false);
+  const [currentAnalysis, setCurrentAnalysis] = useState(null);
+  const [recentAnalyses, setRecentAnalyses] = useState([]);
+  const [stats, setStats] = useState({
+    total_analyses: 0,
+    today_analyses: 0,
+    average_scores: {
+      speed: 0,
+      seo: 0,
+      security: 0,
+      mobile: 0,
+    },
+  });
+  const [loading, setLoading] = useState(false);
 
-  const handleAnalysisComplete = (result) => {
-    console.log("Analysis completed:", result);
-    setAnalysisResult(result);
-    setShowResults(true);
+  // Fetch recent analyses and stats on component mount
+  useEffect(() => {
+    fetchRecentAnalyses();
+    fetchStats();
+  }, []);
+
+  const fetchRecentAnalyses = async () => {
+    try {
+      const response = await fetch("http://localhost:8000/history?limit=5");
+      if (response.ok) {
+        const data = await response.json();
+        setRecentAnalyses(data.recent_analyses || []);
+      }
+    } catch (error) {
+      console.error("Error fetching recent analyses:", error);
+    }
+  };
+
+  const fetchStats = async () => {
+    try {
+      const response = await fetch("http://localhost:8000/stats");
+      if (response.ok) {
+        const data = await response.json();
+        setStats(data);
+      }
+    } catch (error) {
+      console.error("Error fetching stats:", error);
+    }
+  };
+
+  const handleAnalysisComplete = (results) => {
+    setCurrentAnalysis(results);
+    // Refresh recent analyses and stats
+    fetchRecentAnalyses();
+    fetchStats();
+  };
+
+  const handleViewPreviousAnalysis = async (analysisId) => {
+    setLoading(true);
+    try {
+      const response = await fetch(
+        `http://localhost:8000/analysis/${analysisId}`
+      );
+      if (response.ok) {
+        const data = await response.json();
+        setCurrentAnalysis(data);
+      }
+    } catch (error) {
+      console.error("Error fetching analysis:", error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleNewAnalysis = () => {
-    setShowResults(false);
-    setAnalysisResult(null);
+    setCurrentAnalysis(null);
+  };
+
+  const getGradeColor = (grade) => {
+    switch (grade) {
+      case "A":
+        return "text-green-600 bg-green-100";
+      case "B":
+        return "text-blue-600 bg-blue-100";
+      case "C":
+        return "text-yellow-600 bg-yellow-100";
+      case "D":
+        return "text-orange-600 bg-orange-100";
+      case "F":
+        return "text-red-600 bg-red-100";
+      default:
+        return "text-gray-600 bg-gray-100";
+    }
   };
 
   return (
     <Layout>
-      <div className="max-w-4xl mx-auto px-4 py-8">
-        {/* Header */}
-        <div className="text-center mb-12">
-          <h1 className="text-4xl font-bold text-gray-900 mb-4">
-            WebAudit Pro
-          </h1>
-          <p className="text-xl text-gray-600 max-w-2xl mx-auto">
-            Comprehensive website analysis tool for performance, SEO, security,
-            and mobile optimization
-          </p>
+      <div className="min-h-screen bg-gray-50">
+        {/* Header Section */}
+        <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+            <div className="text-center">
+              <h1 className="text-4xl font-bold mb-4">WebAudit Pro</h1>
+              <p className="text-xl text-blue-100 mb-8 max-w-3xl mx-auto">
+                Professional web diagnostics and analysis suite. Get
+                comprehensive insights into your website's performance, SEO,
+                security, and mobile experience.
+              </p>
+
+              {/* Stats Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 max-w-4xl mx-auto">
+                <div className="bg-white/10 backdrop-blur-sm rounded-lg p-4">
+                  <div className="text-2xl font-bold">
+                    {stats.total_analyses}
+                  </div>
+                  <div className="text-sm text-blue-100">Total Analyses</div>
+                </div>
+                <div className="bg-white/10 backdrop-blur-sm rounded-lg p-4">
+                  <div className="text-2xl font-bold">
+                    {stats.today_analyses}
+                  </div>
+                  <div className="text-sm text-blue-100">Today</div>
+                </div>
+                <div className="bg-white/10 backdrop-blur-sm rounded-lg p-4">
+                  <div className="text-2xl font-bold">
+                    {Math.round(
+                      (stats.average_scores.speed +
+                        stats.average_scores.seo +
+                        stats.average_scores.security +
+                        stats.average_scores.mobile) /
+                        4
+                    )}
+                  </div>
+                  <div className="text-sm text-blue-100">Avg Score</div>
+                </div>
+                <div className="bg-white/10 backdrop-blur-sm rounded-lg p-4">
+                  <div className="text-2xl font-bold">20-30s</div>
+                  <div className="text-sm text-blue-100">Avg Time</div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
-        {/* Main Content */}
-        {!showResults ? (
-          <AnalyzeForm onAnalysisComplete={handleAnalysisComplete} />
-        ) : (
-          <div>
-            {/* Results */}
-            <div className="mb-6">
-              <button
-                onClick={handleNewAnalysis}
-                className="mb-4 text-blue-500 hover:text-blue-600 font-medium flex items-center"
-              >
-                ← Analyze Another Website
-              </button>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          {!currentAnalysis ? (
+            <div className="space-y-8">
+              {/* Main Analysis Form */}
+              <AnalyzeForm onAnalysisComplete={handleAnalysisComplete} />
 
-              <ResultsCard result={analysisResult} />
-            </div>
-          </div>
-        )}
+              {/* Recent Analyses Section */}
+              {recentAnalyses.length > 0 && (
+                <div className="bg-white rounded-lg shadow-md p-6">
+                  <div className="flex items-center justify-between mb-6">
+                    <h2 className="text-2xl font-bold text-gray-900">
+                      Recent Analyses
+                    </h2>
+                    <span className="text-sm text-gray-500">
+                      Click any analysis to view details
+                    </span>
+                  </div>
 
-        {/* Features Section */}
-        {!showResults && (
-          <div className="mt-16 grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <div className="text-center p-6 bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg">
-              <div className="w-12 h-12 bg-blue-500 rounded-lg flex items-center justify-center mx-auto mb-4">
-                <svg
-                  className="w-6 h-6 text-white"
-                  fill="currentColor"
-                  viewBox="0 0 20 20"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-8.293l-3-3a1 1 0 00-1.414 0l-3 3a1 1 0 001.414 1.414L9 9.414V13a1 1 0 102 0V9.414l1.293 1.293a1 1 0 001.414-1.414z"
-                    clipRule="evenodd"
-                  />
-                </svg>
+                  <div className="space-y-4">
+                    {recentAnalyses.map((analysis) => (
+                      <div
+                        key={analysis.id}
+                        onClick={() => handleViewPreviousAnalysis(analysis.id)}
+                        className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 cursor-pointer transition-all duration-200 group"
+                      >
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-3">
+                            <div className="flex-shrink-0">
+                              <div
+                                className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getGradeColor(
+                                  analysis.overall_grade
+                                )}`}
+                              >
+                                Grade {analysis.overall_grade}
+                              </div>
+                            </div>
+                            <div>
+                              <p className="text-sm font-medium text-gray-900 group-hover:text-blue-600">
+                                {analysis.url}
+                              </p>
+                              <p className="text-sm text-gray-500">
+                                Score: {analysis.overall_score}/100 •{" "}
+                                {new Date(
+                                  analysis.analyzed_at
+                                ).toLocaleDateString()}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex-shrink-0">
+                          <svg
+                            className="w-5 h-5 text-gray-400 group-hover:text-blue-500 transition-colors"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth="2"
+                              d="M9 5l7 7-7 7"
+                            />
+                          </svg>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Features Section */}
+              <div className="bg-white rounded-lg shadow-md p-6">
+                <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center">
+                  Comprehensive Website Analysis
+                </h2>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  <div className="text-center">
+                    <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+                      <svg
+                        className="w-6 h-6 text-blue-600"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="2"
+                          d="M13 10V3L4 14h7v7l9-11h-7z"
+                        />
+                      </svg>
+                    </div>
+                    <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                      Performance
+                    </h3>
+                    <p className="text-sm text-gray-600">
+                      Core Web Vitals, load times, resource optimization, and
+                      page speed insights
+                    </p>
+                  </div>
+
+                  <div className="text-center">
+                    <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+                      <svg
+                        className="w-6 h-6 text-green-600"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="2"
+                          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                        />
+                      </svg>
+                    </div>
+                    <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                      SEO
+                    </h3>
+                    <p className="text-sm text-gray-600">
+                      Meta tags, structured data, content optimization, and
+                      search visibility
+                    </p>
+                  </div>
+
+                  <div className="text-center">
+                    <div className="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+                      <svg
+                        className="w-6 h-6 text-red-600"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="2"
+                          d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                        />
+                      </svg>
+                    </div>
+                    <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                      Security
+                    </h3>
+                    <p className="text-sm text-gray-600">
+                      SSL certificates, security headers, vulnerability scanning
+                    </p>
+                  </div>
+
+                  <div className="text-center">
+                    <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+                      <svg
+                        className="w-6 h-6 text-purple-600"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="2"
+                          d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
+                        />
+                      </svg>
+                    </div>
+                    <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                      Mobile
+                    </h3>
+                    <p className="text-sm text-gray-600">
+                      Responsiveness, device compatibility, touch usability
+                      testing
+                    </p>
+                  </div>
+                </div>
               </div>
-              <h3 className="font-semibold text-gray-900 mb-2">
-                Speed Analysis
-              </h3>
-              <p className="text-sm text-gray-600">
-                Core Web Vitals, load times, and performance metrics
-              </p>
             </div>
-
-            <div className="text-center p-6 bg-gradient-to-br from-green-50 to-green-100 rounded-lg">
-              <div className="w-12 h-12 bg-green-500 rounded-lg flex items-center justify-center mx-auto mb-4">
-                <svg
-                  className="w-6 h-6 text-white"
-                  fill="currentColor"
-                  viewBox="0 0 20 20"
+          ) : (
+            /* Results View */
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={handleNewAnalysis}
+                  className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
                 >
-                  <path
-                    fillRule="evenodd"
-                    d="M7 2a1 1 0 00-.707 1.707L7 4.414v3.758a1 1 0 01-.293.707l-4 4C.817 14.769 2.156 18 4.828 18h10.343c2.673 0 4.012-3.231 2.122-5.121l-4-4A1 1 0 0113 8.172V4.414l.707-.707A1 1 0 0013 2H7zm2 6.172V4h2v4.172a3 3 0 00.879 2.12l1.027 1.028a4 4 0 00-2.171.102l-.47.156a4 4 0 01-2.53 0l-.563-.187a1.993 1.993 0 00-.114-.035l1.063-1.063A3 3 0 009 8.172z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-              </div>
-              <h3 className="font-semibold text-gray-900 mb-2">
-                SEO Optimization
-              </h3>
-              <p className="text-sm text-gray-600">
-                Meta tags, content optimization, and search visibility
-              </p>
-            </div>
+                  <svg
+                    className="w-4 h-4 mr-2"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                      d="M10 19l-7-7m0 0l7-7m-7 7h18"
+                    />
+                  </svg>
+                  Analyze Another Website
+                </button>
 
-            <div className="text-center p-6 bg-gradient-to-br from-red-50 to-red-100 rounded-lg">
-              <div className="w-12 h-12 bg-red-500 rounded-lg flex items-center justify-center mx-auto mb-4">
-                <svg
-                  className="w-6 h-6 text-white"
-                  fill="currentColor"
-                  viewBox="0 0 20 20"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                    clipRule="evenodd"
-                  />
-                </svg>
+                <div className="text-sm text-gray-500">
+                  {currentAnalysis.cached && (
+                    <span className="inline-flex items-center">
+                      <svg
+                        className="w-4 h-4 mr-1"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="2"
+                          d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                        />
+                      </svg>
+                      Cached result
+                    </span>
+                  )}
+                </div>
               </div>
-              <h3 className="font-semibold text-gray-900 mb-2">
-                Security Scan
-              </h3>
-              <p className="text-sm text-gray-600">
-                SSL, headers, and security vulnerability detection
-              </p>
-            </div>
 
-            <div className="text-center p-6 bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg">
-              <div className="w-12 h-12 bg-purple-500 rounded-lg flex items-center justify-center mx-auto mb-4">
-                <svg
-                  className="w-6 h-6 text-white"
-                  fill="currentColor"
-                  viewBox="0 0 20 20"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M3 5a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2h-2.22l.123.489.804.804A1 1 0 0113 18H7a1 1 0 01-.707-1.707l.804-.804L7.22 15H5a2 2 0 01-2-2V5zm5.771 7H5V5h10v7H8.771z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-              </div>
-              <h3 className="font-semibold text-gray-900 mb-2">Mobile Ready</h3>
-              <p className="text-sm text-gray-600">
-                Responsive design and mobile user experience testing
-              </p>
+              <ResultsCard analysis={currentAnalysis} />
             </div>
-          </div>
-        )}
+          )}
+
+          {loading && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white rounded-lg p-6 flex items-center space-x-3">
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                <span className="text-gray-700">Loading analysis...</span>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </Layout>
   );
