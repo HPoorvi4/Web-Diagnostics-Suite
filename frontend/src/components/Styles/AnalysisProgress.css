@@ -1,0 +1,218 @@
+/* Overlay */
+.ap-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 50;
+}
+
+/* Modal */
+.ap-modal {
+  background: white;
+  border-radius: 12px;
+  padding: 2rem;
+  max-width: 400px;
+  width: 100%;
+  box-shadow: 0 25px 50px rgba(0,0,0,0.25);
+  transform: scale(1);
+  transition: all 0.3s ease;
+}
+
+/* Header */
+.ap-header {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+.ap-loader, .ap-error-icon {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 1rem auto;
+  border-radius: 50%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.ap-loader .ap-spinner {
+  width: 32px;
+  height: 32px;
+  border-bottom: 2px solid #2563eb;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.ap-error-icon {
+  background: #fee2e2;
+}
+
+.ap-error-icon .ap-icon {
+  width: 32px;
+  height: 32px;
+  color: #b91c1c;
+}
+
+.ap-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.ap-normal-text { color: #111827; }
+.ap-error-text { color: #b91c1c; }
+
+/* Progress Section */
+.ap-progress-section { margin-bottom: 1.5rem; }
+.ap-progress-bar-wrapper { margin-bottom: 1rem; }
+
+.ap-progress-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.875rem;
+  color: #4b5563;
+  margin-bottom: 0.5rem;
+}
+
+.ap-progress-bg {
+  width: 100%;
+  background: #e5e7eb;
+  border-radius: 0.375rem;
+  height: 0.75rem;
+  overflow: hidden;
+}
+
+.ap-progress-fill {
+  height: 100%;
+  border-radius: 0.375rem;
+  background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+  transition: width 0.5s ease-out;
+  position: relative;
+}
+
+.ap-progress-glow {
+  height: 100%;
+  width: 100%;
+  background: rgba(255,255,255,0.2);
+  border-radius: 0.375rem;
+  animation: pulse 2s infinite;
+}
+
+/* Stage Indicators */
+.ap-current-stage { margin-top: 1rem; }
+.ap-stage-indicator {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ap-stage-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  background: #3b82f6;
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+
+.ap-stage-text { font-size: 0.875rem; font-weight: 500; color: #374151; }
+.ap-stage-message { font-size: 0.75rem; color: #6b7280; line-height: 1.4; margin-top: 0.25rem; }
+
+/* Step Indicators */
+.ap-stage-steps {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.25rem;
+  margin-top: 1.5rem;
+}
+
+.ap-step {
+  height: 0.25rem;
+  border-radius: 9999px;
+  background: #e5e7eb;
+  transition: background 0.3s;
+}
+
+.ap-step-active { background: #3b82f6; }
+
+/* Error Section */
+.ap-error-section {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 0.5rem;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.ap-error-title { font-size: 0.875rem; font-weight: 500; color: #b91c1c; margin-bottom: 0.5rem; }
+.ap-error-message { font-size: 0.875rem; color: #991b1b; }
+
+/* Actions */
+.ap-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.ap-button {
+  padding: 0.5rem 1.5rem;
+  border-radius: 0.5rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  border: none;
+}
+
+.ap-button-cancel {
+  background: #d1d5db;
+  color: #374151;
+}
+
+.ap-button-cancel:hover { background: #9ca3af; }
+
+.ap-button-error {
+  background: #dc2626;
+  color: white;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.ap-button-error:hover { background: #b91c1c; box-shadow: 0 6px 16px rgba(0,0,0,0.2); }
+
+.ap-info-text {
+  display: flex;
+  align-items: center;
+  font-size: 0.75rem;
+  color: #6b7280;
+  gap: 0.25rem;
+}
+
+.ap-info-icon { width: 1rem; height: 1rem; }
+
+/* Additional Info */
+.ap-additional-info { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #e5e7eb; }
+.ap-info-grid {
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  font-size: 0.75rem;
+  color: #374151;
+}
+
+.ap-info-item {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+}
+
+.ap-info-item.performance { background: #16a34a; }
+.ap-info-item.seo { background: #3b82f6; }
+.ap-info-item.security { background: #dc2626; }
+.ap-info-item.mobile { background: #8b5cf6; }
+
+/* Animations */
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }

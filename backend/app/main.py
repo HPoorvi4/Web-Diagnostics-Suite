@@ -32,6 +32,8 @@ from datetime import datetime, timedelta
 from typing import Dict
 import traceback
 from sqlalchemy import text
+import json
+from decimal import Decimal
 
 # Import our modules
 from database import get_db, create_tables, DatabaseManager
@@ -51,6 +53,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Custom JSON encoder for WebSocket messages
+def json_serializer(obj):
+    """Custom JSON serializer for datetime and other objects"""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, Decimal):
+        return float(obj)
+    elif hasattr(obj, 'dict'):
+        return obj.dict()
+    elif hasattr(obj, '__dict__'):
+        return obj.__dict__
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
 # WebSocket connection manager
 class ConnectionManager:
     def __init__(self):
@@ -67,9 +82,12 @@ class ConnectionManager:
     async def send_progress(self, session_id: str, progress_data: dict):
         if session_id in self.active_connections:
             try:
-                await self.active_connections[session_id].send_json(progress_data)
+                # Use custom JSON serializer to handle datetime objects
+                json_data = json.loads(json.dumps(progress_data, default=json_serializer))
+                await self.active_connections[session_id].send_json(json_data)
             except Exception as e:
                 logger.error(f"Error sending progress to {session_id}: {e}")
+                logger.error(f"Progress data that failed: {progress_data}")
                 self.disconnect(session_id)
 
 # Initialize connection manager
@@ -475,13 +493,16 @@ async def perform_background_analysis(
         # Build and send final results
         response = build_analysis_response(saved_analysis, False)
         
+        # Convert response to dict with proper serialization
+        response_dict = json.loads(json.dumps(response.dict(), default=json_serializer))
+        
         # Send final results
         await manager.send_progress(session_id, {
             "stage": "Complete!",
             "progress": 100,
             "message": "Analysis finished successfully",
             "analysis_id": analysis_id,
-            "results": response.dict()
+            "results": response_dict
         })
         
     except Exception as e:

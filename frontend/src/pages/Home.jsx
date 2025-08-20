@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import AnalyzeForm from "../components/AnalyzeForm";
 import ResultsCard from "../components/ResultsCard";
 import Layout from "../components/Layout";
+import "./Styles/Homes.css";
 
 const Home = () => {
   const [currentAnalysis, setCurrentAnalysis] = useState(null);
@@ -15,21 +16,46 @@ const Home = () => {
       security: 0,
       mobile: 0,
     },
+    analysis_available: false,
   });
   const [loading, setLoading] = useState(false);
+  const [apiError, setApiError] = useState(null);
 
-  // Fetch recent analyses and stats on component mount
+  const API_BASE_URL = "http://localhost:8000";
+
   useEffect(() => {
+    // Check if backend is available first
+    checkBackendHealth();
     fetchRecentAnalyses();
     fetchStats();
   }, []);
 
+  const checkBackendHealth = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/health`);
+      if (!response.ok) {
+        throw new Error(`Backend health check failed: ${response.status}`);
+      }
+      const healthData = await response.json();
+      console.log("Backend health:", healthData);
+      setApiError(null);
+    } catch (error) {
+      console.error("Backend health check failed:", error);
+      setApiError(
+        "Backend server is not responding. Please make sure the backend is running on http://localhost:8000"
+      );
+    }
+  };
+
   const fetchRecentAnalyses = async () => {
     try {
-      const response = await fetch("http://localhost:8000/history?limit=5");
+      const response = await fetch(`${API_BASE_URL}/history?limit=5`);
       if (response.ok) {
         const data = await response.json();
         setRecentAnalyses(data.recent_analyses || []);
+        console.log("Recent analyses:", data.recent_analyses);
+      } else {
+        console.warn("Failed to fetch recent analyses:", response.status);
       }
     } catch (error) {
       console.error("Error fetching recent analyses:", error);
@@ -38,10 +64,13 @@ const Home = () => {
 
   const fetchStats = async () => {
     try {
-      const response = await fetch("http://localhost:8000/stats");
+      const response = await fetch(`${API_BASE_URL}/stats`);
       if (response.ok) {
         const data = await response.json();
         setStats(data);
+        console.log("Stats:", data);
+      } else {
+        console.warn("Failed to fetch stats:", response.status);
       }
     } catch (error) {
       console.error("Error fetching stats:", error);
@@ -49,24 +78,32 @@ const Home = () => {
   };
 
   const handleAnalysisComplete = (results) => {
+    console.log("Analysis completed:", results);
     setCurrentAnalysis(results);
-    // Refresh recent analyses and stats
-    fetchRecentAnalyses();
-    fetchStats();
+
+    // Refresh recent analyses and stats after completion
+    setTimeout(() => {
+      fetchRecentAnalyses();
+      fetchStats();
+    }, 1000);
   };
 
   const handleViewPreviousAnalysis = async (analysisId) => {
     setLoading(true);
     try {
-      const response = await fetch(
-        `http://localhost:8000/analysis/${analysisId}`
-      );
+      console.log("Fetching analysis:", analysisId);
+      const response = await fetch(`${API_BASE_URL}/analysis/${analysisId}`);
       if (response.ok) {
         const data = await response.json();
+        console.log("Previous analysis loaded:", data);
         setCurrentAnalysis(data);
+      } else {
+        console.error("Failed to fetch analysis:", response.status);
+        alert("Failed to load analysis. Please try again.");
       }
     } catch (error) {
       console.error("Error fetching analysis:", error);
+      alert("Error loading analysis. Please check your connection.");
     } finally {
       setLoading(false);
     }
@@ -74,246 +111,213 @@ const Home = () => {
 
   const handleNewAnalysis = () => {
     setCurrentAnalysis(null);
+    // Scroll to top to show the form
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const getGradeColor = (grade) => {
+  const getGradeClass = (grade) => {
     switch (grade) {
       case "A":
-        return "text-green-600 bg-green-100";
+        return "grade-pill grade-a";
       case "B":
-        return "text-blue-600 bg-blue-100";
+        return "grade-pill grade-b";
       case "C":
-        return "text-yellow-600 bg-yellow-100";
+        return "grade-pill grade-c";
       case "D":
-        return "text-orange-600 bg-orange-100";
+        return "grade-pill grade-d";
       case "F":
-        return "text-red-600 bg-red-100";
+        return "grade-pill grade-f";
       default:
-        return "text-gray-600 bg-gray-100";
+        return "grade-pill grade-default";
     }
+  };
+
+  const formatDate = (dateString) => {
+    try {
+      return new Date(dateString).toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch (e) {
+      return "Unknown date";
+    }
+  };
+
+  const calculateOverallAverage = () => {
+    const { speed, seo, security, mobile } = stats.average_scores;
+    const average = (speed + seo + security + mobile) / 4;
+    return Math.round(average) || 0;
   };
 
   return (
     <Layout>
-      <div className="min-h-screen bg-gray-50">
-        {/* Header Section */}
-        <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-            <div className="text-center">
-              <h1 className="text-4xl font-bold mb-4">WebAudit Pro</h1>
-              <p className="text-xl text-blue-100 mb-8 max-w-3xl mx-auto">
+      <div className="home-page">
+        {/* API Error Banner */}
+        {apiError && (
+          <div className="api-error-banner">
+            <div className="error-content">
+              <strong>⚠️ Backend Connection Error:</strong>
+              <p>{apiError}</p>
+              <button onClick={checkBackendHealth} className="retry-connection">
+                Retry Connection
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Hero Section */}
+        <div className="hero-section">
+          <div className="hero-content">
+            <div className="hero-inner">
+              <h1 className="hero-title">WebAudit Pro</h1>
+              <p className="hero-subtitle">
                 Professional web diagnostics and analysis suite. Get
                 comprehensive insights into your website's performance, SEO,
                 security, and mobile experience.
               </p>
 
               {/* Stats Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 max-w-4xl mx-auto">
-                <div className="bg-white/10 backdrop-blur-sm rounded-lg p-4">
-                  <div className="text-2xl font-bold">
-                    {stats.total_analyses}
-                  </div>
-                  <div className="text-sm text-blue-100">Total Analyses</div>
+              <div className="stats-grid">
+                <div className="stat-card">
+                  <div className="stat-value">{stats.total_analyses}</div>
+                  <div className="stat-label">Total Analyses</div>
                 </div>
-                <div className="bg-white/10 backdrop-blur-sm rounded-lg p-4">
-                  <div className="text-2xl font-bold">
-                    {stats.today_analyses}
-                  </div>
-                  <div className="text-sm text-blue-100">Today</div>
+                <div className="stat-card">
+                  <div className="stat-value">{stats.today_analyses}</div>
+                  <div className="stat-label">Today</div>
                 </div>
-                <div className="bg-white/10 backdrop-blur-sm rounded-lg p-4">
-                  <div className="text-2xl font-bold">
-                    {Math.round(
-                      (stats.average_scores.speed +
-                        stats.average_scores.seo +
-                        stats.average_scores.security +
-                        stats.average_scores.mobile) /
-                        4
-                    )}
-                  </div>
-                  <div className="text-sm text-blue-100">Avg Score</div>
+                <div className="stat-card">
+                  <div className="stat-value">{calculateOverallAverage()}</div>
+                  <div className="stat-label">Avg Score</div>
                 </div>
-                <div className="bg-white/10 backdrop-blur-sm rounded-lg p-4">
-                  <div className="text-2xl font-bold">20-30s</div>
-                  <div className="text-sm text-blue-100">Avg Time</div>
+                <div className="stat-card">
+                  <div className="stat-value">
+                    {stats.analysis_available ? "✓ Ready" : "⚠️ Limited"}
+                  </div>
+                  <div className="stat-label">Service Status</div>
                 </div>
               </div>
+
+              {/* Service Status Indicator */}
+              {!stats.analysis_available && (
+                <div className="service-warning">
+                  <p>
+                    ⚠️ Analysis service is running in limited mode. Some
+                    features may not be available.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Main Content */}
+        <div className="main-content">
           {!currentAnalysis ? (
-            <div className="space-y-8">
-              {/* Main Analysis Form */}
+            <div className="content-sections">
+              {/* Analysis Form */}
               <AnalyzeForm onAnalysisComplete={handleAnalysisComplete} />
 
-              {/* Recent Analyses Section */}
+              {/* Recent Analyses */}
               {recentAnalyses.length > 0 && (
-                <div className="bg-white rounded-lg shadow-md p-6">
-                  <div className="flex items-center justify-between mb-6">
-                    <h2 className="text-2xl font-bold text-gray-900">
-                      Recent Analyses
-                    </h2>
-                    <span className="text-sm text-gray-500">
+                <div className="recent-analyses">
+                  <div className="recent-analyses-header">
+                    <h2 className="recent-analyses-title">Recent Analyses</h2>
+                    <span className="recent-analyses-hint">
                       Click any analysis to view details
                     </span>
                   </div>
 
-                  <div className="space-y-4">
+                  <div className="analyses-list">
                     {recentAnalyses.map((analysis) => (
                       <div
                         key={analysis.id}
                         onClick={() => handleViewPreviousAnalysis(analysis.id)}
-                        className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 cursor-pointer transition-all duration-200 group"
+                        className="analysis-item"
+                        style={{ cursor: "pointer" }}
                       >
-                        <div className="flex-1">
-                          <div className="flex items-center space-x-3">
-                            <div className="flex-shrink-0">
+                        <div className="analysis-main">
+                          <div className="analysis-details">
+                            <div className="grade-badge">
                               <div
-                                className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getGradeColor(
+                                className={getGradeClass(
                                   analysis.overall_grade
-                                )}`}
+                                )}
                               >
                                 Grade {analysis.overall_grade}
                               </div>
                             </div>
-                            <div>
-                              <p className="text-sm font-medium text-gray-900 group-hover:text-blue-600">
-                                {analysis.url}
+                            <div className="analysis-info">
+                              <p className="analysis-url" title={analysis.url}>
+                                {analysis.url.length > 50
+                                  ? analysis.url.substring(0, 50) + "..."
+                                  : analysis.url}
                               </p>
-                              <p className="text-sm text-gray-500">
+                              <p className="analysis-meta">
                                 Score: {analysis.overall_score}/100 •{" "}
-                                {new Date(
-                                  analysis.analyzed_at
-                                ).toLocaleDateString()}
+                                {formatDate(analysis.analyzed_at)}
                               </p>
                             </div>
                           </div>
                         </div>
 
-                        <div className="flex-shrink-0">
-                          <svg
-                            className="w-5 h-5 text-gray-400 group-hover:text-blue-500 transition-colors"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth="2"
-                              d="M9 5l7 7-7 7"
-                            />
-                          </svg>
-                        </div>
+                        <div className="analysis-chevron">➔</div>
                       </div>
                     ))}
                   </div>
                 </div>
               )}
 
-              {/* Features Section */}
-              <div className="bg-white rounded-lg shadow-md p-6">
-                <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center">
+              {/* No Recent Analyses Message */}
+              {recentAnalyses.length === 0 && !apiError && (
+                <div className="no-analyses">
+                  <p>
+                    No recent analyses found. Start your first analysis above!
+                  </p>
+                </div>
+              )}
+
+              {/* Features */}
+              <div className="features-section">
+                <h2 className="features-title">
                   Comprehensive Website Analysis
                 </h2>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                  <div className="text-center">
-                    <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-                      <svg
-                        className="w-6 h-6 text-blue-600"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2"
-                          d="M13 10V3L4 14h7v7l9-11h-7z"
-                        />
-                      </svg>
-                    </div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                      Performance
-                    </h3>
-                    <p className="text-sm text-gray-600">
+                <div className="features-grid">
+                  <div className="feature-card">
+                    <div className="feature-icon-wrapper feature-blue">⚡</div>
+                    <h3 className="feature-name">Performance</h3>
+                    <p className="feature-desc">
                       Core Web Vitals, load times, resource optimization, and
                       page speed insights
                     </p>
                   </div>
 
-                  <div className="text-center">
-                    <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-                      <svg
-                        className="w-6 h-6 text-green-600"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2"
-                          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                        />
-                      </svg>
-                    </div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                      SEO
-                    </h3>
-                    <p className="text-sm text-gray-600">
+                  <div className="feature-card">
+                    <div className="feature-icon-wrapper feature-green">🔍</div>
+                    <h3 className="feature-name">SEO</h3>
+                    <p className="feature-desc">
                       Meta tags, structured data, content optimization, and
                       search visibility
                     </p>
                   </div>
 
-                  <div className="text-center">
-                    <div className="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-                      <svg
-                        className="w-6 h-6 text-red-600"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2"
-                          d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-                        />
-                      </svg>
-                    </div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                      Security
-                    </h3>
-                    <p className="text-sm text-gray-600">
+                  <div className="feature-card">
+                    <div className="feature-icon-wrapper feature-red">🔒</div>
+                    <h3 className="feature-name">Security</h3>
+                    <p className="feature-desc">
                       SSL certificates, security headers, vulnerability scanning
                     </p>
                   </div>
 
-                  <div className="text-center">
-                    <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-                      <svg
-                        className="w-6 h-6 text-purple-600"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2"
-                          d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
-                        />
-                      </svg>
+                  <div className="feature-card">
+                    <div className="feature-icon-wrapper feature-purple">
+                      📱
                     </div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                      Mobile
-                    </h3>
-                    <p className="text-sm text-gray-600">
+                    <h3 className="feature-name">Mobile</h3>
+                    <p className="feature-desc">
                       Responsiveness, device compatibility, touch usability
                       testing
                     </p>
@@ -322,60 +326,29 @@ const Home = () => {
               </div>
             </div>
           ) : (
-            /* Results View */
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <button
-                  onClick={handleNewAnalysis}
-                  className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
-                >
-                  <svg
-                    className="w-4 h-4 mr-2"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M10 19l-7-7m0 0l7-7m-7 7h18"
-                    />
-                  </svg>
-                  Analyze Another Website
+            <div className="results-section">
+              <div className="results-header">
+                <button onClick={handleNewAnalysis} className="back-button">
+                  ← Analyze Another Website
                 </button>
-
-                <div className="text-sm text-gray-500">
+                <div className="results-status">
                   {currentAnalysis.cached && (
-                    <span className="inline-flex items-center">
-                      <svg
-                        className="w-4 h-4 mr-1"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2"
-                          d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                        />
-                      </svg>
-                      Cached result
-                    </span>
+                    <span className="cached-result">✔ Cached result</span>
                   )}
+                  <span className="analysis-id">
+                    Analysis ID: {currentAnalysis.id}
+                  </span>
                 </div>
               </div>
-
               <ResultsCard analysis={currentAnalysis} />
             </div>
           )}
 
           {loading && (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-              <div className="bg-white rounded-lg p-6 flex items-center space-x-3">
-                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-                <span className="text-gray-700">Loading analysis...</span>
+            <div className="loading-overlay">
+              <div className="loading-box">
+                <div className="spinner"></div>
+                <span>Loading analysis...</span>
               </div>
             </div>
           )}
